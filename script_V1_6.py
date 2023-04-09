@@ -10,10 +10,13 @@ from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 import optuna
 from keras.regularizers import l2
+import warnings
+warnings.filterwarnings('ignore')
+# tf.debugging.set_log_device_placement(True)
 
 def main():
     dataset_path = "dataset_128x128"
-    num_images = 20000 # 176000
+    num_images = 40000 # 176000
     epochs = 100
     img_size = (64, 64)
     
@@ -25,7 +28,7 @@ def main():
     # Optimize using Optuna
     study = optuna.create_study(direction="minimize")
     study.optimize(lambda trial: objective(
-        trial, x_train, x_val, x_test, epochs), n_trials=50)
+        trial, x_train, x_val, epochs), n_trials=60)
 
     # Display best trial
     best_trial = study.best_trial
@@ -35,8 +38,7 @@ def main():
 
     # Train the model with the best hyperparameters
     best_model, best_batch_size = create_model(best_trial)
-    history = train_model(best_model, x_train, x_val,
-                          x_test, epochs, best_batch_size)
+    history = train_model(best_model, x_train, x_val, epochs, best_batch_size)
 
     # Evaluate and visualize the model
     evaluate_model(history)
@@ -80,62 +82,69 @@ def split_data(images):
     x_val, x_test = train_test_split(x_temp, test_size=0.5, random_state=42)
     return x_train, x_val, x_test
 
-
-def create_encoder(n_filters, l2_weight):
+def create_encoder(n_filters, l2_weight, activations):
     encoder = Sequential()
-    encoder.add(Conv2D(n_filters[0], (3, 3), activation="elu", padding="same", input_shape=(
+    encoder.add(Conv2D(n_filters[0], (3, 3), activation=activations[0], padding="same", input_shape=(
         64, 64, 3), kernel_regularizer=l2(l2_weight)))
     encoder.add(MaxPooling2D((2, 2), padding="same"))
-    encoder.add(Conv2D(n_filters[1], (3, 3), activation="elu",
+    encoder.add(Conv2D(n_filters[1], (3, 3), activation=activations[1],
                 padding="same", kernel_regularizer=l2(l2_weight)))
     encoder.add(MaxPooling2D((2, 2), padding="same"))
-    encoder.add(Conv2D(n_filters[2], (3, 3), activation="elu",
+    encoder.add(Conv2D(n_filters[2], (3, 3), activation=activations[2],
                 padding="same", kernel_regularizer=l2(l2_weight)))
     encoder.add(MaxPooling2D((2, 2), padding="same"))
     return encoder
 
-
-def create_decoder(n_filters, l2_weight):
+def create_decoder(n_filters, l2_weight, activations):
     decoder = Sequential()
-    decoder.add(Conv2D(n_filters[2], (3, 3), activation="elu", padding="same", input_shape=(
+    decoder.add(Conv2D(n_filters[2], (3, 3), activation=activations[0], padding="same", input_shape=(
         8, 8, n_filters[2]), kernel_regularizer=l2(l2_weight)))
     decoder.add(UpSampling2D((2, 2)))
-    decoder.add(Conv2D(n_filters[1], (3, 3), activation="elu",
+    decoder.add(Conv2D(n_filters[1], (3, 3), activation=activations[1],
                 padding="same", kernel_regularizer=l2(l2_weight)))
     decoder.add(UpSampling2D((2, 2)))
-    decoder.add(Conv2D(n_filters[0], (3, 3), activation="elu",
+    decoder.add(Conv2D(n_filters[0], (3, 3), activation=activations[2],
                 padding="same", kernel_regularizer=l2(l2_weight)))
     decoder.add(UpSampling2D((2, 2)))
     decoder.add(Conv2D(3, (3, 3), activation="sigmoid", padding="same"))
     return decoder
 
-# Create model function now accepts trial as an argument
 def create_model(trial):
     print("Creating autoencoder model...")
 
     # Retrieve hyperparameters from the trial
     batch_size = trial.suggest_categorical("batch_size", [16, 32, 64, 128])
     learning_rate = trial.suggest_loguniform("learning_rate", 1e-4, 1e-2)
+    l2_weight = trial.suggest_loguniform("l2_weight", 1e-5, 1e-2)
+    activations = [
+        trial.suggest_categorical(f"activation_layer_{i}", ["relu", "elu", "sigmoid", "tanh", "selu", "softmax"]) for i in range(3)
+    ]
 
     n_filters = [
         trial.suggest_int(f"n_filters_layer_{i}", 16, 64) for i in range(3)
     ]
 
-    encoder = create_encoder(n_filters)
-    decoder = create_decoder(n_filters)
+    encoder = create_encoder(n_filters, l2_weight, activations)
+    decoder = create_decoder(n_filters, l2_weight, activations)
 
     model = Sequential([encoder, decoder])
     model.compile(optimizer=Adam(learning_rate=learning_rate), loss="binary_crossentropy")
     return model, batch_size
 
-
-def train_model(model, x_train, x_val, x_test, epochs, batch_size):
+def train_model(model, x_train, x_val, epochs, batch_size):
     print("Training the model...")
     lr_scheduler = ReduceLROnPlateau(
         monitor='val_loss', factor=0.1, patience=5, verbose=2, mode='min',
         min_delta=0.001, cooldown=0, min_lr=0
     )
-    early_stopping = EarlyStopping(monitor="val_loss", patience=6)
+    early_stopping = EarlyStopping(
+        monitor="val_loss", 
+        min_delta=0.001, 
+        patience=6, 
+        verbose=2, 
+        mode='min', 
+        restore_best_weights=True
+    )
     history = model.fit(x_train, x_train, epochs=epochs, batch_size=batch_size, validation_data=(
         x_val, x_val), callbacks=[lr_scheduler, early_stopping])
     return history
@@ -174,11 +183,11 @@ def visualize_results(model, x_test):
 
     plt.show()
 
-def objective(trial, x_train, x_test, epochs):
+def objective(trial, x_train, x_val, epochs):
     model, batch_size = create_model(trial)
     model.summary()
 
-    history = train_model(model, x_train, x_test, epochs, batch_size)
+    history = train_model(model, x_train, x_val, epochs, batch_size)
     loss = history.history["val_loss"][-1]
 
     return loss
