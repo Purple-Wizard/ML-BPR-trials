@@ -130,7 +130,8 @@ dmypy.json
 
 # Dataset folder
 /dataset_128x128
-
+/archive
 
 # Misc
+*.db
 .DS_Store
