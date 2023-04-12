@@ -1,10 +1,10 @@
 import os
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, UpSampling2D
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, Dropout, AveragePooling2D, MaxPooling2D, UpSampling2D, Input
+from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from keras.optimizers import Adam
+from keras.optimizers import Adam, RMSprop, SGD
 from sklearn.model_selection import train_test_split
 from sklearn.decomposition import PCA
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -12,19 +12,19 @@ from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 import optuna
 from keras.regularizers import l2
+from tqdm import tqdm
 import warnings
 warnings.filterwarnings('ignore')
 tf.config.run_functions_eagerly(True)
 # tf.debugging.set_log_device_placement(True)
 
-def main():
-    dataset_path = "dataset_128x128"
-    num_images = 20000 # 176000
-    epochs = 100
-    img_size = (90, 90)
-    opt_trials = 50
-    
-    # Load and preprocess images
+dataset_path = "dataset_128x128"
+num_images = 20000 # 176000
+epochs = 100
+img_size = (64, 64)
+opt_trials = 50
+
+def main():    
     images = load_images(dataset_path, num_images)
     images = preprocess_images(images, img_size)
     x_train, x_val, x_test = split_data(images)
@@ -33,7 +33,7 @@ def main():
     study = optuna.create_study(
         storage="sqlite:///optuna_vis.db", 
         direction="minimize",
-        study_name="v1.7",
+        study_name="v1.8",
         load_if_exists=True
     )
     study.optimize(lambda trial: objective(
@@ -57,28 +57,23 @@ def main():
     print(f"Best model saved to {model_save_path}")
 
 def load_images(path, num_images):
-    print("Loading images...")
-    images = []
-    image_count = 0
+    image_files = []
+
     for root, _, files in os.walk(path):
-        for file in files:
-            if file.lower().endswith('.png'):
-                if image_count >= num_images:
-                    break
-                image = Image.open(os.path.join(root, file))
-                try:
-                    images.append(np.array(image))
-                except:
-                    print(file)
-                image_count += 1
+        image_files.extend([os.path.join(root, file) for file in files if file.lower().endswith('.png')])
+
+    image_files = image_files[:num_images]
+
+    images = [
+        np.array(Image.open(file))
+        for file in tqdm(image_files, desc="Loading Images", unit="images")
+    ]
+
     return np.array(images)
 
-# Preprocessing
 def preprocess_images(images, image_size=None):
-    print("Preprocessing images...")
-    
     processed_images = []
-    for image in images:
+    for image in tqdm(images, desc="Preprocessing images", unit="images"):
         img = Image.fromarray(image)
         
         if image_size is not None:
@@ -122,31 +117,36 @@ def split_data(images):
     x_val, x_test = train_test_split(x_temp, test_size=0.5, random_state=42)
     return x_train, x_val, x_test
 
-def create_encoder(n_filters, l2_weight, activations):
-    encoder = Sequential()
-    encoder.add(Conv2D(n_filters[0], (3, 3), activation=activations[0], padding="same", input_shape=(
-        90, 90, 3), kernel_regularizer=l2(l2_weight)))
-    encoder.add(MaxPooling2D((2, 2), padding="same"))
-    encoder.add(Conv2D(n_filters[1], (3, 3), activation=activations[1],
-                padding="same", kernel_regularizer=l2(l2_weight)))
-    encoder.add(MaxPooling2D((2, 2), padding="same"))
-    encoder.add(Conv2D(n_filters[2], (3, 3), activation=activations[2],
-                padding="same", kernel_regularizer=l2(l2_weight)))
-    encoder.add(MaxPooling2D((2, 2), padding="same"))
+def create_encoder(input_shape, n_filters, l2_weight, activations, dropout_rates, pooling_strategy):
+    input_img = Input(shape=input_shape)
+    x = input_img
+
+    for i in range(3):
+        x = Conv2D(n_filters[i], (3, 3), activation=activations[i], padding="same", kernel_regularizer=l2(l2_weight))(x)
+        x = Dropout(dropout_rates[i])(x)
+        if pooling_strategy[i] == "MaxPooling2D":
+            x = MaxPooling2D((2, 2), padding="same")(x)
+        elif pooling_strategy[i] == "AveragePooling2D":
+            x = AveragePooling2D((2, 2), padding="same")(x)
+
+    encoded = x
+    encoder = Model(input_img, encoded)
     return encoder
 
-def create_decoder(n_filters, l2_weight, activations):
-    decoder = Sequential()
-    decoder.add(Conv2D(n_filters[2], (3, 3), activation=activations[0], padding="same", input_shape=(
-        12, 12, n_filters[2]), kernel_regularizer=l2(l2_weight)))
-    decoder.add(UpSampling2D((2, 2)))
-    decoder.add(Conv2D(n_filters[1], (3, 3), activation=activations[1],
-                padding="same", kernel_regularizer=l2(l2_weight)))
-    decoder.add(UpSampling2D((2, 2)))
-    decoder.add(Conv2D(n_filters[0], (3, 3), activation=activations[2],
-                padding="same", kernel_regularizer=l2(l2_weight)))
-    decoder.add(UpSampling2D((2, 2)))
-    decoder.add(Conv2D(3, (7, 7), activation="sigmoid", padding="valid"))
+def create_decoder(input_shape, n_filters, l2_weight, activations, dropout_rates, pooling_strategy):
+    encoded = Input(shape=input_shape)
+    x = encoded
+
+    for i in range(3):
+        x = Conv2D(n_filters[2 - i], (3, 3), activation=activations[2 - i], padding="same", kernel_regularizer=l2(l2_weight))(x)
+        x = Dropout(dropout_rates[2 - i])(x)
+        if pooling_strategy[2 - i] == "MaxPooling2D":
+            x = UpSampling2D((2, 2))(x)
+        elif pooling_strategy[2 - i] == "AveragePooling2D":
+            x = UpSampling2D((2, 2))(x)
+
+    decoded = Conv2D(3, (3, 3), activation="sigmoid", padding="same")(x)
+    decoder = Model(encoded, decoded)
     return decoder
 
 def create_model(trial):
@@ -161,13 +161,35 @@ def create_model(trial):
     ]
 
     n_filters = [
-        trial.suggest_int(f"n_filters_layer_{i}", 16, 90) for i in range(3)
+        trial.suggest_int(f"n_filters_layer_{i}", 16, 64) for i in range(3)
     ]
     rotation_range = trial.suggest_int("rotation_range", 0, 45)
     width_shift_range = trial.suggest_float("width_shift_range", 0.0, 0.5)
     height_shift_range = trial.suggest_float("height_shift_range", 0.0, 0.5)
     shear_range = trial.suggest_float("shear_range", 0.0, 0.5)
     zoom_range = trial.suggest_float("zoom_range", 0.0, 0.5)
+    dropout_rates = [
+        trial.suggest_float(f"dropout_rate_layer_{i}", 0.0, 0.5) for i in range(3)
+    ]
+    
+    pooling_strategy = [
+        trial.suggest_categorical(f"pooling_strategy_layer_{i}", ["MaxPooling2D", "AveragePooling2D"]) for i in range(3)
+    ]
+
+    optimizer_name = trial.suggest_categorical("optimizer", ["adam", "rmsprop", "sgd"])
+    
+    if optimizer_name == "adam":
+        optimizer = Adam(learning_rate=learning_rate)
+    elif optimizer_name == "rmsprop":
+        optimizer = RMSprop(learning_rate=learning_rate)
+    else:
+        optimizer = SGD(learning_rate=learning_rate)
+
+    h, w = img_size
+
+    encoder = create_encoder((h, w, 3), n_filters, l2_weight, activations, dropout_rates, pooling_strategy)
+    encoder_output_shape = encoder.output_shape[1:]
+    decoder = create_decoder(encoder_output_shape, n_filters, l2_weight, activations, dropout_rates, pooling_strategy)
 
     data_generator = create_image_data_generator(
         rotation_range=rotation_range, 
@@ -177,11 +199,8 @@ def create_model(trial):
         zoom_range=zoom_range
     )
 
-    encoder = create_encoder(n_filters, l2_weight, activations)
-    decoder = create_decoder(n_filters, l2_weight, activations)
-
     model = Sequential([encoder, decoder])
-    model.compile(optimizer=Adam(learning_rate=learning_rate), loss="mse")
+    model.compile(optimizer=optimizer, loss="binary_crossentropy")
     return model, batch_size, data_generator
 
 def train_model(model, x_train, x_val, epochs, batch_size, data_generator):
