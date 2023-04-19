@@ -246,15 +246,24 @@ def train_model(model, x_train, x_train_processed, x_val, x_val_processed, epoch
         restore_best_weights=True
     )
 
-    train_generator = data_generator.flow(x_train_processed, x_train, batch_size=batch_size)
-    validation_generator = data_generator.flow(x_val_processed, x_val, batch_size=batch_size)
+    # train_generator = data_generator.flow(x_train_processed, x_train, batch_size=batch_size)
+    # validation_generator = data_generator.flow(x_val_processed, x_val, batch_size=batch_size)
 
+    # history = model.fit(
+    #     train_generator,
+    #     epochs=epochs, 
+    #     callbacks=[lr_scheduler, early_stopping],
+    #     steps_per_epoch=len(x_train) // batch_size,
+    #     validation_data=validation_generator,
+    #     validation_steps=len(x_val) // batch_size,
+    #     verbose=1
+    # )
     history = model.fit(
-        train_generator,
+        x=x_train, y=x_train_processed,
         epochs=epochs, 
         callbacks=[lr_scheduler, early_stopping],
         steps_per_epoch=len(x_train) // batch_size,
-        validation_data=validation_generator,
+        validation_data=[x_val, x_val_processed],
         validation_steps=len(x_val) // batch_size,
         verbose=1
     )
