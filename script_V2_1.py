@@ -2,18 +2,15 @@ import os
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from keras.layers import Conv2D, Dropout, AveragePooling2D, MaxPooling2D, UpSampling2D, Input, Conv2DTranspose, Dense
+from keras.layers import Conv2D, Dropout, Input, Conv2DTranspose
 from keras.models import Sequential, Model
 from keras.preprocessing.image import ImageDataGenerator
-from keras.applications import ResNet50
 from keras.optimizers import Adam, RMSprop, SGD
 from sklearn.model_selection import train_test_split
-from sklearn.decomposition import PCA
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from skimage.metrics import structural_similarity
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from PIL import Image, ImageOps
+from PIL import Image
 import matplotlib.pyplot as plt
-from keras.regularizers import l2
 from tqdm import tqdm
 import optuna
 import cv2
@@ -31,6 +28,7 @@ num_images = 1000 # 176000
 epochs = 100
 img_size = (64, 64)
 opt_trials = 0
+
 
 def main():    
     original_images, processed_images = load_images(dataset_path, num_images)
@@ -60,6 +58,8 @@ def main():
     visualize_and_evaluate_results(best_model, x_test, history)
     best_model.save(model_save_path)
     print(f"Best model saved to {model_save_path}")
+    print(best_model.summary())
+
 
 def load_images(path, num_images):
     image_files = []
@@ -93,8 +93,8 @@ def resize_images(images, img_size):
 
 def apply_log_filter(img, kernel_size=5, sigma=0.5):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-   # filtered = apply_salt_and_pepper_filter(gray, 0.04, 3)
-    log = cv2.GaussianBlur(gray, (kernel_size, kernel_size), sigma)
+    filtered = apply_salt_and_pepper_filter(gray, 0.04, 3)
+    log = cv2.GaussianBlur(filtered, (kernel_size, kernel_size), sigma)
     log = cv2.Laplacian(log, cv2.CV_16S, ksize=kernel_size)
     log = cv2.convertScaleAbs(log)
     return log
@@ -323,7 +323,7 @@ def visualize_and_evaluate_results(model, x_test, history):
         # Plotting the reconstructed images
         ax = plt.subplot(4, n, i + 1 + 3 * n)
         plt.imshow(decoded_imgs[i])
-        plt.title(f'Reconstructed\nAvg SSIM: {np.mean(ssims):.4f} \nPSNR_re :{np.mean(ssims_re):.4f}', fontsize=10)
+        plt.title(f'Reconstructed\nAvg SSIM: {np.mean(ssims):.4f} \nSSIM_re :{np.mean(ssims_re):.4f}', fontsize=10)
         ax.get_xaxis().set_visible(False)
         ax.get_yaxis().set_visible(False)
 
@@ -339,5 +339,5 @@ def objective(trial, x_train, x_train_processed, x_val, x_val_processed, epochs)
     return loss
 
 
-if __name__ == "__main__":
-    main()
+
+main()
