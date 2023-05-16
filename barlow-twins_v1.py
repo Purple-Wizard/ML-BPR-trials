@@ -11,10 +11,10 @@ from keras.layers import (
     Activation,
     GlobalAvgPool2D,
 )
-from tensorflow.data import experimental
 from keras.regularizers import l2
-from script_V2_1 import main
-
+from validate_bb import load_and_predict_images
+from tensorflow.keras.layers.experimental.preprocessing import Rescaling
+from sklearn.model_selection import train_test_split
 
 
 
@@ -27,18 +27,119 @@ AUTO = tf.data.AUTOTUNE
 CROP_TO = 32
 SEED = 42
 
-PROJECT_DIM = 4096
+PROJECT_DIM = 1024
 BATCH_SIZE = 200
 EPOCHS = 100
 
 
 ## DATA LOADER
 
-dataset_one, dataset_two = main()
+dataset_one, dataset_two = load_and_predict_images('dataset_sorted', 'models/best_model.h5')
+
+dataset_one = np.squeeze(dataset_one)
+dataset_two = np.squeeze(dataset_two)
+
+train_ratio = 0.8  # Ratio of samples for training
+
+# Determine the number of samples for training
+num_train_samples = int(len(dataset_one) * train_ratio)
+
+# Split the first dataset
+X_train = dataset_one[:num_train_samples]
+X_test = dataset_one[num_train_samples:]
+
+# Split the second dataset
+y_train = dataset_two[:num_train_samples]
+y_test = dataset_two[num_train_samples:]
+
+
+print('Train and test samples for the first network: ', len(X_train), len(X_test))
+print('Train and test samples for the second network: ', len(y_train), len(y_test))
+
+
+ssl_ds_one = tf.data.Dataset.from_tensor_slices(X_train)
+ssl_ds_one = (ssl_ds_one.shuffle(1024, seed=SEED).batch(BATCH_SIZE).prefetch(AUTO))
+
+
+ssl_ds_two = tf.data.Dataset.from_tensor_slices(y_train)
+ssl_ds_two = (ssl_ds_two.shuffle(1024, seed=SEED).batch(BATCH_SIZE).prefetch(AUTO))
+
+
+# We then zip both of these datasets.
+ssl_ds = tf.data.Dataset.zip((ssl_ds_one, ssl_ds_two))
 
 
 
-## LR SCHEDULER
+# Loss Function
+
+def off_diagonal(x):
+    n = tf.shape(x)[0]
+    flattened = tf.reshape(x, [-1])[:-1]
+    off_diagonals = tf.reshape(flattened, (n-1, n+1))[:, 1:]
+    return tf.reshape(off_diagonals, [-1])
+
+
+def normalize_repr(z):
+    z_norm = (z - tf.reduce_mean(z, axis=0)) / tf.math.reduce_std(z, axis=0)
+    return z_norm
+
+
+def compute_loss(z_a, z_b, lambd):
+    # Get batch size and representation dimension.
+    batch_size = tf.cast(tf.shape(z_a)[0], z_a.dtype)
+    repr_dim = tf.shape(z_a)[1]
+
+    # Normalize the representations along the batch dimension.
+    z_a_norm = normalize_repr(z_a)
+    z_b_norm = normalize_repr(z_b)
+
+    # Cross-correlation matrix.
+    c = tf.matmul(z_a_norm, z_b_norm, transpose_a=True) / batch_size
+
+    # Loss.
+    on_diag = tf.linalg.diag_part(c) + (-1)
+    on_diag = tf.reduce_sum(tf.pow(on_diag, 2))
+    off_diag = off_diagonal(c)
+    off_diag = tf.reduce_sum(tf.pow(off_diag, 2))
+    loss = on_diag + (lambd * off_diag)
+    return loss 
+
+
+# Build the model
+
+class BarlowTwins(tf.keras.Model):
+    def __init__(self, encoder, lambd=5e-3):
+        super(BarlowTwins, self).__init__()
+        self.encoder = encoder
+        self.lambd = lambd
+        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
+
+    @property
+    def metrics(self):
+        return [self.loss_tracker]
+
+    def train_step(self, data):
+        # Unpack the data.
+        ds_one, ds_two = data
+
+        # Forward pass through the encoder and predictor.
+        with tf.GradientTape() as tape:
+            z_a, z_b = self.encoder(ds_one, training=True), self.encoder(ds_two, training=True)
+            loss = compute_loss(z_a, z_b, self.lambd) 
+
+        # Compute gradients and update the parameters.
+        gradients = tape.gradient(loss, self.encoder.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.encoder.trainable_variables))
+
+        # Monitor loss.
+        self.loss_tracker.update_state(loss)
+        return {"loss": self.loss_tracker.result()}
+
+
+
+
+
+# Set up parameters
 
 class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
     """
@@ -92,12 +193,7 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         )
 
 
-
-
-## RESNET20
-
 WEIGHT_DECAY = 5e-4
-
 
 def stem(inputs):
     """Construct Stem Convolutional Group
@@ -308,7 +404,7 @@ def get_network(n=2, hidden_dim=128, use_pred=False, return_before_head=True):
 
     # The input tensor
     inputs = Input(shape=(32, 32, 3))
-    x = experimental.preprocessing.Rescaling(scale=1.0 / 127.5, offset=-1)(inputs)
+    x = Rescaling(scale=1.0 / 127.5, offset=-1)(inputs)
 
     # The Stem Convolution Group
     x = stem(x)
@@ -338,112 +434,16 @@ def get_network(n=2, hidden_dim=128, use_pred=False, return_before_head=True):
 
 
 
-
-
-
-# Convert the array to image object
- 
-# original_images = bgr_images = [cv2.cvtColor(original_image.astype('uint8'), cv2.COLOR_BGR2GRAY) for original_image in original]
-# decoded_images = bgr_images = [cv2.cvtColor(decoded_image.astype('uint8'), cv2.COLOR_BGR2GRAY) for decoded_image in decoded]
-
-
-
-
-# We then zip both of these datasets.
-ssl_ds = zip((dataset_one, dataset_two))
-
-
-
-## BARLOW TWINS LOSS
-
-
-def off_diagonal(x):
-    n = tf.shape(x)[0]
-    flattened = tf.reshape(x, [-1])[:-1]
-    off_diagonals = tf.reshape(flattened, (n-1, n+1))[:, 1:]
-    return tf.reshape(off_diagonals, [-1])
-
-
-def normalize_repr(z):
-    z_norm = (z - tf.reduce_mean(z, axis=0)) / tf.math.reduce_std(z, axis=0)
-    return z_norm
-
-
-def compute_loss(z_a, z_b, lambd):
-    # Get batch size and representation dimension.
-    batch_size = tf.cast(tf.shape(z_a)[0], z_a.dtype)
-    repr_dim = tf.shape(z_a)[1]
-
-    # Normalize the representations along the batch dimension.
-    z_a_norm = normalize_repr(z_a)
-    z_b_norm = normalize_repr(z_b)
-
-    # Cross-correlation matrix.
-    c = tf.matmul(z_a_norm, z_b_norm, transpose_a=True) / batch_size
-
-    # Loss.
-    on_diag = tf.linalg.diag_part(c) + (-1)
-    on_diag = tf.reduce_sum(tf.pow(on_diag, 2))
-    off_diag = off_diagonal(c)
-    off_diag = tf.reduce_sum(tf.pow(off_diag, 2))
-    loss = on_diag + (lambd * off_diag)
-    return loss
-
-
-
-
-
-
-
-## BARLOW TWINS MODEL
-
-
-class BarlowTwins(tf.keras.Model):
-    def __init__(self, encoder, lambd=5e-3):
-        super(BarlowTwins, self).__init__()
-        self.encoder = encoder
-        self.lambd = lambd
-        self.loss_tracker = tf.keras.metrics.Mean(name="loss")
-
-    @property
-    def metrics(self):
-        return [self.loss_tracker]
-
-    def train_step(self, data):
-        # Unpack the data.
-        ds_one, ds_two = data
-
-        # Forward pass through the encoder and predictor.
-        with tf.GradientTape() as tape:
-            z_a, z_b = self.encoder(ds_one, training=True), self.encoder(ds_two, training=True)
-            loss = compute_loss(z_a, z_b, self.lambd) 
-
-        # Compute gradients and update the parameters.
-        gradients = tape.gradient(loss, self.encoder.trainable_variables)
-        self.optimizer.apply_gradients(zip(gradients, self.encoder.trainable_variables))
-
-        # Monitor loss.
-        self.loss_tracker.update_state(loss)
-        return {"loss": self.loss_tracker.result()}
-    
-    
-    
-
-
-
-## SET UP LEARNING RATE SCHEDULE, OPTIMIZER AND THE NETWORK
-    
-STEPS_PER_EPOCH = len(x_train) // BATCH_SIZE
+STEPS_PER_EPOCH = len(X_train) // BATCH_SIZE
 TOTAL_STEPS = STEPS_PER_EPOCH * EPOCHS
 WARMUP_EPOCHS = int(EPOCHS * 0.1)
 WARMUP_STEPS = int(WARMUP_EPOCHS * STEPS_PER_EPOCH)
 
-lr_decayed_fn = WarmUpCosine(
+lr_decayed_fn = WarmUpCosine( 
     learning_rate_base=1e-3,
     total_steps=EPOCHS * STEPS_PER_EPOCH,
     warmup_learning_rate=0.0,
-    warmup_steps=WARMUP_STEPS
-)
+    warmup_steps=WARMUP_STEPS)
 
 
 
@@ -455,22 +455,18 @@ plt.xlabel("Train Step")
 plt.show()
 
 
-resnet_enc = get_network(hidden_dim=PROJECT_DIM, use_pred=False, 
-                                          return_before_head=False)
+
+
+resnet_enc = get_network(hidden_dim=PROJECT_DIM, use_pred=False, return_before_head=False)
 optimizer = tf.keras.optimizers.SGD(learning_rate=lr_decayed_fn, momentum=0.9)
 
 
 
 
-
-
-
-## TRAIN USING BARLOW TWINS
-
-
 barlow_twins = BarlowTwins(resnet_enc)
 barlow_twins.compile(optimizer=optimizer)
 history = barlow_twins.fit(ssl_ds, epochs=EPOCHS)
+
 
 
 # Visualize the training progress of the model.
@@ -480,62 +476,31 @@ plt.title("Barlow Twin Loss")
 plt.show()
 
 
-# Save the model.
-barlow_twins.encoder.save("barlow_twins")
 
 
 
 
 
+# Get the weights of the model's encoder
+encoder_weights = barlow_twins.encoder.get_weights()
 
+# Flatten the 4-dimensional weight arrays
+encoder_weights_flat = [arr.flatten() for arr in encoder_weights]
 
-## LINEAR EVALUATION
+# Calculate the correlation matrix manually
+num_layers = len(encoder_weights_flat)
+correlation_matrix = np.zeros((num_layers, num_layers))
+for i in range(num_layers):
+    for j in range(num_layers):
+        corr = np.dot(encoder_weights_flat[i], encoder_weights_flat[j]) / (
+            np.linalg.norm(encoder_weights_flat[i]) * np.linalg.norm(encoder_weights_flat[j])
+        )
+        correlation_matrix[i, j] = corr
 
-# We first create labeled `Dataset` objects.
-#train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
-#test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test))
+# Visualize the correlation matrix using a heatmap
+import matplotlib.pyplot as plt
 
-# Then we shuffle, batch, and prefetch this dataset for performance. We
-# also apply random resized crops as an augmentation but only to the
-# training set.
-#train_ds = (
-#    train_ds.shuffle(1024)
-#    .map(lambda x, y: (flip_random_crop(x), y), num_parallel_calls=AUTO)
-#    .batch(BATCH_SIZE)
-#    .prefetch(AUTO)
-#)
-#test_ds = test_ds.batch(BATCH_SIZE).prefetch(AUTO)
-
-# Extract the backbone ResNet20.
-backbone = tf.keras.Model(
-    barlow_twins.encoder.input, barlow_twins.encoder.layers[-8].output
-)
-
-# We then create our linear classifier and train it.
-backbone.trainable = False
-inputs = tf.keras.layers.Input((CROP_TO, CROP_TO, 3))
-x = backbone(inputs, training=False)
-outputs = tf.keras.layers.Dense(10, activation="softmax")(x)
-linear_model = tf.keras.Model(inputs, outputs, name="linear_model")
-
-
-
-
-# Cosine decay for linear evaluation.
-cosine_decayed_lr = tf.keras.experimental.CosineDecay(
-    initial_learning_rate=0.3, decay_steps=EPOCHS * STEPS_PER_EPOCH
-)
-
-
-
-# Compile model and start training.
-linear_model.compile(
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
-    optimizer=tf.keras.optimizers.SGD(cosine_decayed_lr, momentum=0.9),
-)
-history = linear_model.fit(
-    x_train, validation_data=decoded_images, epochs=10
-)
-_, test_acc = linear_model.evaluate(decoded_images)
-print("Test accuracy: {:.2f}%".format(test_acc * 100))
+plt.imshow(correlation_matrix, cmap='hot', interpolation='nearest')
+plt.title("Correlation Matrix")
+plt.colorbar()
+plt.show()

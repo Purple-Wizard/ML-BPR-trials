@@ -26,7 +26,7 @@ dataset_path = "archive"
 model_save_path = "models/best_model.h5"
 num_images = 1000 # 176000
 epochs = 100
-img_size = (64, 64)
+img_size = (32, 32)
 opt_trials = 0
 
 
@@ -337,7 +337,6 @@ def objective(trial, x_train, x_train_processed, x_val, x_val_processed, epochs)
     loss = history.history["val_loss"][-1]
 
     return loss
-
 
 
 main()

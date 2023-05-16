@@ -6,6 +6,7 @@ import cv2
 import matplotlib.pyplot as plt
 import random
 import os
+import tensorflow as tf
 
 def load_images(path, num_images):
     image_files = []
@@ -21,7 +22,7 @@ def load_images(path, num_images):
         for file in tqdm(image_files, desc="Loading original images", unit="images")
     ]
 
-    images = resize_images(original_images, (64, 64))
+    images = resize_images(original_images, (32, 32))
 
     return np.array(images)
 
@@ -71,7 +72,8 @@ def load_and_predict_images(image_directory, model_path):
     model = load_model(model_path)
 
     # List to store the original and predicted images
-    original_and_predicted = []
+    original = []
+    predicted = []
 
     # Predict each image one by one
     for image in images:
@@ -80,9 +82,10 @@ def load_and_predict_images(image_directory, model_path):
         prediction = model.predict(processed_image)
         
         # Store the original and predicted image
-        original_and_predicted.append((image, prediction))
+        original.append(image)
+        predicted.append(prediction)
     
-    return original_and_predicted
+    return original, predicted
 
 def visualize_images(image_pairs):
     fig, axs = plt.subplots(2, 5, figsize=(20, 8))
@@ -107,4 +110,4 @@ def visualize_images(image_pairs):
     plt.show()
 
 predictions = load_and_predict_images('dataset_sorted', 'models/best_model.h5')
-visualize_images(predictions)
+#visualize_images(predictions)
