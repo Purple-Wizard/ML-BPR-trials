@@ -28,7 +28,7 @@ def load_images(path, num_images):
 
     processed_images = preprocess_images(resized)
 
-    original_train, original_val, original_test = split_data(original_images)
+    original_train, original_val, original_test = split_data(resized)
     processed_train, processed_val, processed_test = split_data(processed_images)
 
     return np.array(original_train), np.array(original_val), np.array(original_test), np.array(processed_train), np.array(processed_val), np.array(processed_test)
@@ -46,10 +46,10 @@ def resize_images(images, img_size):
     return resized_imgs
 
 def display_images(images_lists, titles=["Original", "Gray", "Gaussian", "Canny", "Normalised"]):
-    fig, axs = plt.subplots(5, 5, figsize=(15, 15))
+    fig, axs = plt.subplots(4, 4, figsize=(15, 15))
     print(len(images_lists))
     for i in range(len(images_lists)):
-        if (i > 4):
+        if (i > 3):
             break
 
         for j in range(len(images_lists[0])):
@@ -82,7 +82,7 @@ def normalize_image(img):
 
 def apply_salt_pepper_noise(image, salt_prob, pepper_prob):
     noisy_image = np.copy(image)
-    height, width = image.shape
+    height, width, channel = image.shape
 
     # Add salt noise
     num_salt = int(height * width * salt_prob)
@@ -108,26 +108,25 @@ def split_data(images):
 def preprocess_images(images):
     processed_images = []
     display_images_list = []
-    titles = ["Original", "Grey", "S&P", "Gaussian", "Normalised"]
+    titles = ["Original", "S&P", "Gaussian", "Normalised"]
 
     for i, img in enumerate(tqdm(images, desc="Preprocessing images", unit="images")):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Removed the grayscale conversion
         
-        salt_pepper = apply_salt_pepper_noise(gray.copy(), 0.01, 0.01)
+        salt_pepper = apply_salt_pepper_noise(img.copy(), 0.01, 0.01)  # Apply noise on the original image
         # Reduce noise with Gaussian blur
         blur_vis = cv2.GaussianBlur(salt_pepper, (3, 3), 0)
         
-        blur = cv2.convertScaleAbs(blur_vis)
+        # Convert to absolute scale is not necessary with 3-channel image
         
         # Normalize the image
-        normalized = cv2.normalize(salt_pepper, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-        print(normalized.shape)
+        normalized = cv2.normalize(blur_vis, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
 
-        display_images_list.append([img, gray, salt_pepper, blur_vis, normalized])
+        display_images_list.append([img, salt_pepper, blur_vis, normalized])
         
         processed_images.append(normalized)
 
-    display_images(display_images_list, titles)
+    # display_images(display_images_list, titles)
 
     return np.array(processed_images, dtype=np.float32)
 
