@@ -32,9 +32,9 @@ def load_images(path, num_images):
     original_train, original_val, original_test = split_data(resized)
     processed_train, processed_val, processed_test = split_data(processed_images)
 
-    train_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_train), np.array(processed_train)))
-    val_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_val), np.array(processed_val)))
-    test_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_test), np.array(processed_test)))
+    train_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_train), np.array(original_train)))
+    val_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_val), np.array(original_val)))
+    test_dataset = tf.data.Dataset.from_tensor_slices((np.array(original_test), np.array(original_test)))
 
     return {
         'train': train_dataset,
@@ -72,11 +72,19 @@ def display_images(images_lists, titles=["Original"]):
     plt.show()
 
 def apply_log_filter(img, kernel_size=5, sigma=0.5):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    log = cv2.GaussianBlur(gray, (kernel_size, kernel_size), sigma)
-    log = cv2.Laplacian(log, cv2.CV_16S, ksize=kernel_size)
+    log = cv2.GaussianBlur(img, (kernel_size, kernel_size), sigma)
+    # log = cv2.Laplacian(log, cv2.CV_16S, ksize=kernel_size)
     log = cv2.convertScaleAbs(log)
-    return log
+    r_channel, g_channel, b_channel = cv2.split(log)
+
+    # Apply Laplacian to each channel
+    r_laplacian = cv2.Laplacian(r_channel, cv2.CV_16S, ksize=kernel_size)
+    g_laplacian = cv2.Laplacian(g_channel, cv2.CV_16S, ksize=kernel_size)
+    b_laplacian = cv2.Laplacian(b_channel, cv2.CV_16S, ksize=kernel_size)
+
+    # Merge the channels back together
+    laplacian_image = cv2.merge([r_laplacian, g_laplacian, b_laplacian])
+    return laplacian_image
 
 def apply_sobel_filter(img, kernel_size=3):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -124,14 +132,16 @@ def preprocess_images(images):
 
         salt_pepper, salt_indices, pepper_indices = apply_salt_pepper_noise(img.copy(), 0.01, 0.01)
         noise_coords.append((salt_indices, pepper_indices))
+
+        #log = apply_log_filter(salt_pepper, 1, 0)
         
-        # blur_vis = cv2.GaussianBlur(salt_pepper, (3, 3), 0)
+        blur_vis = cv2.GaussianBlur(salt_pepper, (3, 3), 0)
         # normalized = cv2.normalize(blur_vis, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
 
-        # display_images_list.append([img, salt_pepper, blur_vis, normalized])
-        processed_images.append(salt_pepper)
+        display_images_list.append([img, salt_pepper, blur_vis])
+        processed_images.append(blur_vis)
 
-    # display_images(display_images_list, titles)
+    display_images(display_images_list, titles)
 
     return np.array(processed_images, dtype=np.float32), min_max_values, noise_coords
 

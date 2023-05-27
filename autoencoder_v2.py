@@ -11,12 +11,13 @@ import numpy as np
 from tensorflow.keras.layers import Input, Dense, Conv2D, MaxPool2D, Dropout, Conv2DTranspose, UpSampling2D, Add
 from tensorflow.keras.models import Model
 from tensorflow.keras import regularizers
+from keras.callbacks import ReduceLROnPlateau, EarlyStopping
 from skimage.metrics import structural_similarity
-from preprocess import load_images
+from preprocessv2 import load_images
 import random
 
 
-data = load_images('archive', 1000)
+data = load_images('dataset_128x128', 20000)
 
 train_data_arr = data['train']
 test_data_arr = data['test']
@@ -101,10 +102,23 @@ decoder = create_decoder(encoder)
 encoder.save('encoder.h5')
 decoder.save('decoder.h5')
 
+lr_scheduler = ReduceLROnPlateau(
+        monitor='val_loss', factor=0.1, patience=10, verbose=1, mode='min',
+        min_delta=0.001, cooldown=3, min_lr=1e-6
+    )
+early_stopping = EarlyStopping(
+        monitor="val_loss",
+        min_delta=0.0001,
+        patience=10,
+        verbose=1,
+        mode='min',
+        restore_best_weights=True
+    )
+
 model = Model(encoder.input, decoder(encoder.output))
 model.summary()
 model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss='mae')
-history_comp = model.fit(train_data_arr, epochs=50, validation_split=0.2, batch_size=32, validation_data=(validation_data_arr))
+history_comp = model.fit(train_data_arr, epochs=100, validation_split=0.2, batch_size=32, validation_data=(validation_data_arr), verbose=1, callbacks=[lr_scheduler, early_stopping])
 # validate_data_comp = model.predict(test_data_arr)
 
 encoded = encoder.predict(test_data_arr)
@@ -123,7 +137,7 @@ plt.legend()
 for i, idx in enumerate(random_indices):
     ax = plt.subplot(3, n, i + n + 1)
     plt.imshow(test_iter[0][idx])
-    ssims = [structural_similarity(test_iter[0][idx].numpy().reshape(128, 128, 3), decoded[idx].reshape(128, 128, 3), data_range=1, multichannel=True, win_size=3) for i in range(len(decoded))]
+    ssims = [structural_similarity(test_iter[1][idx].numpy().reshape(128, 128, 3), decoded[idx].reshape(128, 128, 3), data_range=1, multichannel=True, win_size=3) for i in range(len(decoded))]
     plt.gray()
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
@@ -134,8 +148,9 @@ for i, idx in enumerate(random_indices):
     plt.gray()
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
+    og_size = test_iter[0][idx].numpy().size * test_iter[0][idx].numpy().itemsize
     enc_size = encoded[idx].size * encoded[idx].itemsize
     dec_size = decoded[idx].size * decoded[idx].itemsize
-    print(f'Encoded: {enc_size} bytes | Decoded: {dec_size} bytes')
+    print(f'Original: {og_size} | Encoded: {enc_size} bytes | Decoded: {dec_size} bytes')
 
 plt.show()
