@@ -34,7 +34,7 @@ def load_images(path, num_images):
 
     train_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_train), np.array(original_train)))
     val_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_val), np.array(original_val)))
-    test_dataset = tf.data.Dataset.from_tensor_slices((np.array(original_test), np.array(original_test)))
+    test_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_test), np.array(original_test)))
 
     return {
         'train': train_dataset,
@@ -141,7 +141,7 @@ def preprocess_images(images):
         display_images_list.append([img, salt_pepper, blur_vis])
         processed_images.append(blur_vis)
 
-    display_images(display_images_list, titles)
+    # display_images(display_images_list, titles)
 
     return np.array(processed_images, dtype=np.float32), min_max_values, noise_coords
 

@@ -1,23 +1,18 @@
 import tensorflow as tf
-from tensorflow import keras
-import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image 
-import os
-import distutils
-from sklearn.preprocessing import MinMaxScaler
 from keras.models import Model
-import numpy as np
-from tensorflow.keras.layers import Input, Dense, Conv2D, MaxPool2D, Dropout, Conv2DTranspose, UpSampling2D, Add
-from tensorflow.keras.models import Model
-from tensorflow.keras import regularizers
+from keras.layers import Input, Conv2D, Conv2DTranspose, Add, Activation
+from keras.models import Model
+from keras.optimizers import Adam
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping
 from skimage.metrics import structural_similarity
-from preprocessv2 import load_images
 import random
+import numpy as np
+import matplotlib.pyplot as plt
 
+from hashing_model import HashingLayer
+from preprocessv2 import load_images
 
-data = load_images('dataset_128x128', 5000)
+data = load_images('dataset_128x128', 1000)
 
 train_data_arr = data['train']
 test_data_arr = data['test']
@@ -63,13 +58,13 @@ validation_data_arr = validation_data_arr.batch(32)
 #     return Model(decoder_input, a22)
 
 def ConvBlock(x, filters, strides, padding='same'):
-    x = tf.keras.layers.Conv2D(filters, (3,3), strides=strides, padding=padding)(x)
-    x = tf.keras.layers.Activation('relu')(x)
+    x = Conv2D(filters, (3,3), strides=strides, padding=padding)(x)
+    x = Activation('relu')(x)
     return x
 
 def ConvTransposeBlock(x, filters, strides, padding='same'):
-    x = tf.keras.layers.Conv2DTranspose(filters, (3,3), strides=strides, padding=padding)(x)
-    x = tf.keras.layers.Activation('relu')(x)
+    x = Conv2DTranspose(filters, (3,3), strides=strides, padding=padding)(x)
+    x = Activation('relu')(x)
     return x
 
 def create_encoder(input_shape=(128, 128, 3)):
@@ -78,51 +73,62 @@ def create_encoder(input_shape=(128, 128, 3)):
     a3 = ConvBlock(a1, 64, 2)
     a5 = ConvBlock(a3, 128, 1)
     a7 = ConvBlock(a5, 128, 1)
-    skip_0 = tf.keras.layers.Add()([a7, a5])
+    skip_0 = Add()([a7, a5])
     a9 = ConvBlock(skip_0, 64, 1)
     a11 = ConvBlock(a9, 3, 1)
+    a12 = HashingLayer(2)(Model(input_img, a11).output)
     
-    return Model(input_img, a11)
+    return tf.keras.Model(input_img, a12)
 
-def create_decoder(encoder):
-    input_shape = encoder.output.shape[1:]
+def create_decoder(hashing_model):
+    input_shape = hashing_model.output.shape[1:]
     decoder_input = Input(shape=input_shape)
     a13 = ConvTransposeBlock(decoder_input, 32, 1)
     a15 = ConvTransposeBlock(a13, 128, 2)
     a17 = ConvTransposeBlock(a15, 64, 1)
     a19 = ConvTransposeBlock(a17, 64, 1)
-    skip_1 = tf.keras.layers.Add()([a17, a19])
+    skip_1 = Add()([a17, a19])
     a21 = ConvTransposeBlock(skip_1, 3, 1)
 
-    return Model(decoder_input, a21)
+    return tf.keras.Model(decoder_input, a21)
 
 encoder = create_encoder()
 decoder = create_decoder(encoder)
 
-lr_scheduler = ReduceLROnPlateau(
-        monitor='val_loss', factor=0.1, patience=10, verbose=1, mode='min',
-        min_delta=0.001, cooldown=3, min_lr=1e-6
-    )
-early_stopping = EarlyStopping(
-        monitor="val_loss",
-        min_delta=0.0001,
-        patience=10,
-        verbose=1,
-        mode='min',
-        restore_best_weights=True
-    )
-
 model = Model(encoder.input, decoder(encoder.output))
-model.summary()
-try:
-    encoder.summary()
-    decoder.summary()
 
-except:
-    pass
-model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss='mae')
-history_comp = model.fit(train_data_arr, epochs=100, validation_split=0.2, batch_size=32, validation_data=(validation_data_arr), verbose=1, callbacks=[lr_scheduler, early_stopping])
-# validate_data_comp = model.predict(test_data_arr)
+lr_scheduler = ReduceLROnPlateau(
+                    monitor='val_loss',
+                    factor=0.1,
+                    patience=5,
+                    verbose=1,
+                    mode='min',
+                    min_delta=0.001,
+                    cooldown=3,
+                    min_lr=1e-6
+                )
+early_stopping = EarlyStopping(
+                    monitor="val_loss",
+                    min_delta=0.0001,
+                    patience=12,
+                    verbose=1,
+                    mode='min',
+                    restore_best_weights=True
+                )
+
+encoder.summary()
+decoder.summary()
+
+model.compile(optimizer=Adam(learning_rate=1e-3), loss='mae')
+history_comp = model.fit(
+    train_data_arr,
+    epochs=100,
+    validation_split=0.2,
+    batch_size=32,
+    validation_data=(validation_data_arr),
+    verbose=1,
+    callbacks=[lr_scheduler, early_stopping]
+)
 
 encoder.save('models/encoder.h5')
 decoder.save('models/decoder.h5')
@@ -157,6 +163,6 @@ for i, idx in enumerate(random_indices):
     og_size = test_iter[0][idx].numpy().size * test_iter[0][idx].numpy().itemsize
     enc_size = encoded[idx].size * encoded[idx].itemsize
     dec_size = decoded[idx].size * decoded[idx].itemsize
-    print(f'Original: {og_size} | Encoded: {enc_size} bytes | Decoded: {dec_size} bytes')
+    print(f'Original: {og_size} bytes | Encoded: {enc_size} bytes | Decoded: {dec_size} bytes')
 
 plt.show()
