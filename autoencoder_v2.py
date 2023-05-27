@@ -17,7 +17,7 @@ from preprocessv2 import load_images
 import random
 
 
-data = load_images('dataset_128x128', 20000)
+data = load_images('dataset_128x128', 5000)
 
 train_data_arr = data['train']
 test_data_arr = data['test']
@@ -99,8 +99,8 @@ def create_decoder(encoder):
 encoder = create_encoder()
 decoder = create_decoder(encoder)
 
-encoder.save('encoder.h5')
-decoder.save('decoder.h5')
+encoder.save('models/encoder.h5')
+decoder.save('models/decoder.h5')
 
 lr_scheduler = ReduceLROnPlateau(
         monitor='val_loss', factor=0.1, patience=10, verbose=1, mode='min',
@@ -117,6 +117,12 @@ early_stopping = EarlyStopping(
 
 model = Model(encoder.input, decoder(encoder.output))
 model.summary()
+try:
+    encoder.summary()
+    decoder.summary()
+
+except:
+    pass
 model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3), loss='mae')
 history_comp = model.fit(train_data_arr, epochs=100, validation_split=0.2, batch_size=32, validation_data=(validation_data_arr), verbose=1, callbacks=[lr_scheduler, early_stopping])
 # validate_data_comp = model.predict(test_data_arr)
