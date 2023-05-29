@@ -84,20 +84,32 @@ def create_encoder(input_shape=(128, 128, 3)):
     
     return Model(input_img, a11)
 
-def create_decoder(encoder):
+def create_hashing(encoder):
     input_shape = encoder.output.shape[1:]
+    flattened = tf.keras.layers.Flatten()(encoder.output)
+    hashed = Dense(64*64*3)(flattened)
+    reshaped = Reshape((64,64,3))(hashed)
+    return Model(encoder.input, reshaped)
+
+def create_decoder(hashing):
+    input_shape = hashing.output.shape[1:]
     decoder_input = Input(shape=input_shape)
-    a13 = ConvTransposeBlock(decoder_input, 32, 1)
-    a15 = ConvTransposeBlock(a13, 128, 2)
-    a17 = ConvTransposeBlock(a15, 64, 1)
-    a19 = ConvTransposeBlock(a17, 64, 1)
+    a13 = ConvTransposeBlock(decoder_input, 64, 2, 'valid')   # Change the strides and padding
+    a14 = ConvTransposeBlock(a13, 64, 2, 'valid')
+    a15 = ConvTransposeBlock(a14, 128, 1)
+    a17 = ConvTransposeBlock(a15, 128, 1)
+    a19 = ConvTransposeBlock(a17, 128, 1)
     skip_1 = tf.keras.layers.Add()([a17, a19])
     a21 = ConvTransposeBlock(skip_1, 3, 1)
 
     return Model(decoder_input, a21)
 
 encoder = create_encoder()
-decoder = create_decoder(encoder)
+hashing = create_hashing(encoder)
+decoder = create_decoder(hashing)
+
+model = Model(encoder.input, decoder(hashing.output))
+model.summary()
 
 lr_scheduler = ReduceLROnPlateau(
         monitor='val_loss', factor=0.1, patience=10, verbose=1, mode='min',
@@ -112,8 +124,6 @@ early_stopping = EarlyStopping(
         restore_best_weights=True
     )
 
-model = Model(encoder.input, decoder(encoder.output))
-model.summary()
 try:
     encoder.summary()
     decoder.summary()

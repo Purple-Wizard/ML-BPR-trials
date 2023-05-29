@@ -8,11 +8,13 @@ from skimage.metrics import structural_similarity
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
 
 from hashing_model import HashingLayer
 from preprocessv2 import load_images
 
-data = load_images('dataset_128x128', 1000)
+data = load_images('dataset_128x128', 25000)
 
 train_data_arr = data['train']
 test_data_arr = data['test']

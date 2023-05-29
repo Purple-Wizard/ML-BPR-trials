@@ -27,7 +27,7 @@ model_save_path = "models/best_model.h5"
 num_images = 1000 # 176000
 epochs = 100
 img_size = (32, 32)
-opt_trials = 0
+opt_trials = 1
 
 
 def main():    
@@ -41,7 +41,7 @@ def main():
     study = optuna.create_study(
         storage="sqlite:///optuna_vis.db", 
         direction="minimize",
-        study_name="mask_ae_v1",
+        study_name="mask_ae_v2",
         load_if_exists=True
     )
     study.optimize(lambda trial: objective(
@@ -195,8 +195,8 @@ def create_model(trial):
     learning_rate = trial.suggest_loguniform("learning_rate", 1e-4, 1e-3)
     l2_weight = trial.suggest_loguniform("l2_weight", 1e-5, 1e-2)
     encoder_units = [
-        trial.suggest_int("encoder_units_1", 256, 512, 2048),
-        trial.suggest_int("encoder_units_2", 128, 256, 1024),
+        trial.suggest_int("encoder_units_1", 512, 1024, 2048),
+        trial.suggest_int("encoder_units_2", 256, 512, 1024),
         trial.suggest_int("encoder_units_3", 256, 512, 2048),
     ]
     print('encoder_units: ', encoder_units)

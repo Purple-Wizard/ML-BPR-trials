@@ -24,7 +24,7 @@ from sklearn.model_selection import train_test_split
 ## HYPERPARAMETER AND CONSTANTS
 
 AUTO = tf.data.AUTOTUNE
-CROP_TO = 32
+CROP_TO = 64
 SEED = 42
 
 PROJECT_DIM = 1024
@@ -403,7 +403,7 @@ def get_network(n=2, hidden_dim=128, use_pred=False, return_before_head=True):
     n_blocks = ((depth - 2) // 9) - 1
 
     # The input tensor
-    inputs = Input(shape=(32, 32, 3))
+    inputs = Input(shape=(64, 64, 3))
     x = Rescaling(scale=1.0 / 127.5, offset=-1)(inputs)
 
     # The Stem Convolution Group

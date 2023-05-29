@@ -131,6 +131,7 @@ dmypy.json
 # Dataset folder
 /dataset_128x128
 /archive
+/dataset_sorted
 
 # Misc
 *.db

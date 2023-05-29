@@ -22,7 +22,7 @@ def load_images(path, num_images):
         for file in tqdm(image_files, desc="Loading original images", unit="images")
     ]
 
-    images = resize_images(original_images, (32, 32))
+    images = resize_images(original_images, (64, 64))
 
     return np.array(images)
 

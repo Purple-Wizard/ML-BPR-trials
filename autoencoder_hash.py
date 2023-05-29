@@ -1,5 +1,5 @@
 import tensorflow as tf
-from preprocess import load_images
+from preprocess import load_images, postprocess_images
 from tensorflow.keras import layers
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import Input, Dense, Reshape, Conv2D, Conv2DTranspose, LeakyReLU, Layer, UpSampling2D, MaxPooling2D, Flatten
@@ -59,9 +59,9 @@ class Autoencoder:
             tf.keras.layers.Conv2D(64, (5, 5), activation='relu', padding='same', strides=2),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Conv2D(128, (5, 5), activation='relu', padding='same', strides=2),
-            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Conv2D(256, (5, 5), activation='relu', padding='same', strides=2),
-            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Flatten(),
             tf.keras.layers.Dense(self.latent_dim),
             HashingLayer(self.num_hash_bits)
@@ -74,9 +74,9 @@ class Autoencoder:
             tf.keras.layers.Dense(8 * 8 * 256),
             tf.keras.layers.Reshape((8, 8, 256)),
             tf.keras.layers.Conv2DTranspose(256, (5, 5), activation='relu', padding='same', strides=2),
-            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Conv2DTranspose(128, (5, 5), activation='relu', padding='same', strides=2),
-            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Conv2DTranspose(64, (5, 5), activation='relu', padding='same', strides=2),
             tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Conv2DTranspose(3, (5, 5), activation='sigmoid', padding='same')
@@ -85,7 +85,7 @@ class Autoencoder:
 
 autoencoder = Autoencoder(latent_dim=256, num_hash_bits=2048)
 autoenc = autoencoder.autoencoder
-x_train, x_val, original_test, x_train_processed, processed_val, x_test_processed = load_images('archive', 1000)
+x_train, x_val, original_test, x_train_processed, processed_val, x_test_processed, min_max_vals, noise_cords = load_images('archive', 1000)
 
 lr_scheduler = ReduceLROnPlateau(
         monitor='val_loss', factor=0.1, patience=10, verbose=1, mode='min',
@@ -100,17 +100,17 @@ early_stopping = EarlyStopping(
         restore_best_weights=True
     )
 
-optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-6)
 autoenc.compile(optimizer, loss='BinaryCrossentropy')
 
-history = autoenc.fit(x_train_processed / 255.0, x_train_processed / 255.0, epochs=150, batch_size=64, validation_data=(x_test_processed, x_test_processed),
-        steps_per_epoch=len(x_train_processed) // 64, verbose=1, callbacks=[lr_scheduler, early_stopping])
+history = autoenc.fit(x_train_processed, x_train_processed, epochs=300, batch_size=32, validation_data=(processed_val, processed_val),
+        steps_per_epoch=len(x_train_processed) // 32, verbose=1, callbacks=[lr_scheduler, early_stopping])
 
 autoencoder.encoder.save('encoder.h5', save_format='tf')
 autoencoder.decoder.save('decoder.h5', save_format='tf')
 
 n = 10
-random_indices = random.sample(range(x_val.shape[0]), n)
+random_indices = random.sample(range(x_test_processed.shape[0]), n)
 plt.figure(figsize=(21, 7))
 ax = plt.subplot(3, 1, 1)
 plt.plot(history.history['loss'], label='Training Loss')
@@ -120,20 +120,21 @@ plt.ylabel('Loss')
 plt.legend()
 for i, idx in enumerate(random_indices):
     ax = plt.subplot(3, n, i + n + 1)
-    plt.imshow(x_val[idx].reshape(64, 64, 3))
+    plt.imshow(x_test_processed[idx].reshape(64, 64, 3))
     plt.gray()
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
-    orig_size = x_val[idx].size * x_val[idx].itemsize
+    orig_size = x_test_processed[idx].size * x_test_processed[idx].itemsize
 
     # display encoded
     ax = plt.subplot(3, n, i + 1 + 2 * n)
-    z = autoencoder.encoder.predict(x_val[idx].reshape(1, 64, 64, 3))
+    z = autoencoder.encoder.predict(x_test_processed[idx].reshape(1, 64, 64, 3))
     decoded_img = autoencoder.decoder.predict(z)
-    ssims = [structural_similarity(x_val[idx], decoded_img.reshape(64, 64, 3), data_range=1, multichannel=True, win_size=3) for i in range(len(x_val))]
+    # post_img = postprocess_images([decoded_img.reshape(64, 64, 3)], min_max_vals, noise_cords)
+    ssims = [structural_similarity(x_test_processed[idx], decoded_img.reshape(64, 64, 3), data_range=1, multichannel=True, win_size=3) for i in range(len(x_test_processed))]
     plt.imshow(decoded_img.reshape(64, 64, 3))
     plt.title(f'Avg SSIM: {np.mean(ssims):.4f}', fontsize=10)
-    plt.gray()
+    plt.jet()
     ax.get_xaxis().set_visible(False)
     ax.get_yaxis().set_visible(False)
     enc_size = z.size * z.itemsize

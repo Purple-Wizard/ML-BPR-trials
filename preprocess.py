@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 import cv2
 import matplotlib.pyplot as plt
+import tensorflow as tf
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 import random
@@ -24,14 +25,25 @@ def load_images(path, num_images):
         for file in tqdm(image_files, desc="Loading original images", unit="images")
     ]
 
-    resized = resize_images(original_images, (64, 64))
+    resized = resize_images(original_images, (128, 128))
 
-    processed_images = preprocess_images(resized)
+    processed_images, min_max_vals, noise_cords = preprocess_images(resized)
 
     original_train, original_val, original_test = split_data(resized)
     processed_train, processed_val, processed_test = split_data(processed_images)
 
-    return np.array(original_train), np.array(original_val), np.array(original_test), np.array(processed_train), np.array(processed_val), np.array(processed_test)
+    train_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_train), np.array(processed_train)))
+    val_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_val), np.array(processed_val)))
+    test_dataset = tf.data.Dataset.from_tensor_slices((np.array(processed_test), np.array(processed_test)))
+
+    return {
+        'train': train_dataset,
+        'val': val_dataset,
+        'test': test_dataset,
+        'min_max_vals': min_max_vals,
+        'noise_cords': noise_cords
+    }
+    # return np.array(original_train), np.array(original_val), np.array(original_test), np.array(processed_train) / 255.0, np.array(processed_val) / 255.0, np.array(processed_test) / 255.0, min_max_vals, noise_cords
 
 def resize_images(images, img_size):
     resized_imgs = []
@@ -45,7 +57,7 @@ def resize_images(images, img_size):
 
     return resized_imgs
 
-def display_images(images_lists, titles=["Original", "Gray", "Gaussian", "Canny", "Normalised"]):
+def display_images(images_lists, titles=["Original"]):
     fig, axs = plt.subplots(4, 4, figsize=(15, 15))
     print(len(images_lists))
     for i in range(len(images_lists)):
@@ -96,7 +108,32 @@ def apply_salt_pepper_noise(image, salt_prob, pepper_prob):
     pepper_indices = np.unravel_index(pepper_coords, (height, width))
     noisy_image[pepper_indices] = 0.0
 
-    return noisy_image
+    return noisy_image, salt_indices, pepper_indices
+
+def preprocess_images(images):
+    processed_images = []
+    min_max_values = []
+    noise_coords = []
+    display_images_list = []
+    titles = ["Original", "S&P", "Gaussian", "Normalised"]
+
+    for i, img in enumerate(tqdm(images, desc="Preprocessing images", unit="images")):
+        min_val = np.min(img)
+        max_val = np.max(img)
+        min_max_values.append((min_val, max_val))
+
+        salt_pepper, salt_indices, pepper_indices = apply_salt_pepper_noise(img.copy(), 0.01, 0.01)
+        noise_coords.append((salt_indices, pepper_indices))
+        
+        # blur_vis = cv2.GaussianBlur(salt_pepper, (3, 3), 0)
+        # normalized = cv2.normalize(blur_vis, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+
+        # display_images_list.append([img, salt_pepper, blur_vis, normalized])
+        processed_images.append(salt_pepper)
+
+    # display_images(display_images_list, titles)
+
+    return np.array(processed_images, dtype=np.float32), min_max_values, noise_coords
 
 def split_data(images):
     print("Splitting data to train, val, and test...\n_________________________________________________________________")
@@ -105,29 +142,32 @@ def split_data(images):
     x_val, x_test = train_test_split(x_temp, test_size=0.7, random_state=42)
     return x_train, x_val, x_test
 
-def preprocess_images(images):
-    processed_images = []
+def denormalize_image(img, min_val, max_val):
+    return img * (max_val - min_val) + min_val
+
+def remove_salt_pepper_noise(image, salt_indices, pepper_indices):
+    restored_image = np.copy(image)
+    restored_image[salt_indices] = cv2.medianBlur(image, 3)[salt_indices]
+    restored_image[pepper_indices] = cv2.medianBlur(image, 3)[pepper_indices]
+    return restored_image
+
+def postprocess_images(images, min_max_values, noise_coords):
+    postprocessed_images = []
     display_images_list = []
-    titles = ["Original", "S&P", "Gaussian", "Normalised"]
-
-    for i, img in enumerate(tqdm(images, desc="Preprocessing images", unit="images")):
-        # Removed the grayscale conversion
+    for i, img in enumerate(images):
+        min_val, max_val = min_max_values[i]
+        denormalized = denormalize_image(img, min_val, max_val)
         
-        salt_pepper = apply_salt_pepper_noise(img.copy(), 0.01, 0.01)  # Apply noise on the original image
-        # Reduce noise with Gaussian blur
-        blur_vis = cv2.GaussianBlur(salt_pepper, (3, 3), 0)
-        
-        # Convert to absolute scale is not necessary with 3-channel image
-        
-        # Normalize the image
-        normalized = cv2.normalize(blur_vis, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        salt_indices, pepper_indices = noise_coords[i]
+        restored = remove_salt_pepper_noise(denormalized, salt_indices, pepper_indices)
 
-        display_images_list.append([img, salt_pepper, blur_vis, normalized])
-        
-        processed_images.append(normalized)
+        postprocessed_images.append(restored)
 
-    # display_images(display_images_list, titles)
+        display_images_list.append([restored, denormalized, img])
 
-    return np.array(processed_images, dtype=np.float32)
+    # display_images(display_images_list, ['restored', 'denormalised', 'preprocessed'])
+
+    return np.array(postprocessed_images, dtype=np.float32) / 255.0
+
 
 # load_images(dataset_path, num_images)
